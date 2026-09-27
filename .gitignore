@@ -1,0 +1,26 @@
+# Claude Code local context — never commit
+CLAUDE.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+
+# Environment / secrets — the Proxmox API token must never land in git
+.env
+.env.local
+secrets.*
+token
+*.token

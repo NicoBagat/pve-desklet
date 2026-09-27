@@ -1,0 +1,8 @@
+{
+    "uuid": "pve-desklet@nicobagat",
+    "name": "Proxmox VE Monitor",
+    "description": "Paged utilization view of a Proxmox VE homelab: overview, nodes, guests, storage and alerts. Uses a read-only API token.",
+    "version": "0.1.0",
+    "max-instances": "3",
+    "prevent-decorations": true
+}

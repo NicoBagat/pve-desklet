@@ -1,0 +1,122 @@
+{
+    "head-connection": {
+        "type": "header",
+        "description": "Connection"
+    },
+    "api-urls": {
+        "type": "entry",
+        "default": "",
+        "description": "Proxmox API URL(s)",
+        "tooltip": "e.g. https://pve.example.com:8006 — separate several with commas; they are tried in order, so listing every cluster node keeps the desklet working when one is down. HTTPS only."
+    },
+    "token-file": {
+        "type": "entry",
+        "default": "~/.config/pve-desklet/token",
+        "description": "API token file",
+        "tooltip": "File containing one line: user@realm!tokenid=secret. Keep it chmod 600."
+    },
+    "tls-fingerprint": {
+        "type": "entry",
+        "default": "",
+        "description": "Pinned certificate SHA-256 (optional)",
+        "tooltip": "Only for a self-signed certificate, e.g. connecting to a node by IP. Leave empty when the URL has a trusted certificate. Requires libsoup 3 (Linux Mint 22+)."
+    },
+    "refresh-interval": {
+        "type": "spinbutton",
+        "default": 15,
+        "min": 5,
+        "max": 600,
+        "step": 5,
+        "units": "seconds",
+        "description": "Refresh every"
+    },
+
+    "head-display": {
+        "type": "header",
+        "description": "Display"
+    },
+    "width": {
+        "type": "spinbutton",
+        "default": 380,
+        "min": 320,
+        "max": 800,
+        "step": 10,
+        "units": "px",
+        "description": "Width"
+    },
+    "start-page": {
+        "type": "combobox",
+        "default": "overview",
+        "options": {
+            "Overview": "overview",
+            "Nodes": "nodes",
+            "Guests": "guests",
+            "Storage": "storage",
+            "Alerts": "alerts"
+        },
+        "description": "Start page"
+    },
+    "auto-rotate": {
+        "type": "spinbutton",
+        "default": 0,
+        "min": 0,
+        "max": 300,
+        "step": 5,
+        "units": "seconds",
+        "description": "Rotate pages every (0 = off)"
+    },
+    "guest-sort": {
+        "type": "combobox",
+        "default": "cpu",
+        "options": {
+            "CPU usage": "cpu",
+            "Memory usage": "mem",
+            "Name": "name",
+            "VMID": "vmid"
+        },
+        "description": "Sort guests by"
+    },
+    "show-stopped": {
+        "type": "switch",
+        "default": true,
+        "description": "Show stopped guests"
+    },
+    "max-guests": {
+        "type": "spinbutton",
+        "default": 20,
+        "min": 5,
+        "max": 100,
+        "step": 1,
+        "units": "guests",
+        "description": "Maximum guests listed"
+    },
+
+    "head-alerts": {
+        "type": "header",
+        "description": "Alerts"
+    },
+    "warn-threshold": {
+        "type": "spinbutton",
+        "default": 80,
+        "min": 50,
+        "max": 99,
+        "step": 1,
+        "units": "%",
+        "description": "Warning above"
+    },
+    "crit-threshold": {
+        "type": "spinbutton",
+        "default": 90,
+        "min": 55,
+        "max": 100,
+        "step": 1,
+        "units": "%",
+        "description": "Critical above"
+    },
+    "watch-tag": {
+        "type": "entry",
+        "default": "watch",
+        "description": "Watched guest tag",
+        "tooltip": "Guests carrying this Proxmox tag raise a critical alert when they are not running. Leave empty to disable."
+    }
+}

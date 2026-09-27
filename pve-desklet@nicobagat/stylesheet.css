@@ -1,0 +1,141 @@
+/* All classes are prefixed pve- to stay clear of the active Cinnamon theme. */
+
+.pve-desklet {
+    background-color: rgba(24, 26, 31, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    padding: 10px 12px 8px 12px;
+    color: #e4e6eb;
+    font-size: 9.5pt;
+    spacing: 6px;
+}
+
+/* Header */
+.pve-header {
+    spacing: 6px;
+    padding-bottom: 5px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.pve-title {
+    font-weight: bold;
+    font-size: 10.5pt;
+}
+.pve-nav {
+    color: #aab0ba;
+    padding: 0 6px;
+    border-radius: 4px;
+    font-size: 12pt;
+}
+.pve-nav:hover {
+    background-color: rgba(255, 255, 255, 0.10);
+    color: #ffffff;
+}
+.pve-dots {
+    color: #6b717c;
+    font-size: 7pt;
+}
+.pve-badge {
+    padding: 0 7px;
+    border-radius: 8px;
+    font-size: 8pt;
+    font-weight: bold;
+    color: #16181d;
+}
+
+/* Body rows */
+.pve-body {
+    spacing: 3px;
+}
+.pve-row {
+    spacing: 8px;
+}
+.pve-item-head {
+    padding-top: 5px;
+}
+.pve-key {
+    width: 46px;
+    color: #9aa0aa;
+}
+.pve-value {
+    width: 96px;
+    text-align: right;
+    font-family: monospace;
+    font-size: 8.5pt;
+}
+.pve-name {
+    font-weight: bold;
+}
+.pve-muted {
+    color: #8a909a;
+    font-size: 8.5pt;
+}
+.pve-message {
+    color: #aab0ba;
+    padding: 8px 0;
+}
+
+/* Guest table columns */
+.pve-vmid {
+    width: 34px;
+    font-family: monospace;
+    font-size: 8.5pt;
+    color: #9aa0aa;
+}
+.pve-kind {
+    width: 20px;
+    font-size: 8pt;
+    color: #9aa0aa;
+}
+.pve-node {
+    width: 46px;
+    font-size: 8pt;
+    color: #9aa0aa;
+}
+.pve-num {
+    width: 36px;
+    text-align: right;
+    font-family: monospace;
+    font-size: 8.5pt;
+}
+.pve-mem {
+    width: 92px;
+    text-align: right;
+    font-family: monospace;
+    font-size: 8.5pt;
+}
+.pve-dot {
+    font-size: 8pt;
+}
+
+/* Usage bars */
+.pve-bar {
+    height: 6px;
+    background-color: rgba(255, 255, 255, 0.10);
+    border-radius: 3px;
+}
+.pve-bar-fill {
+    height: 6px;
+    border-radius: 3px;
+}
+
+/* Severity colours: text */
+.pve-fg-ok   { color: #6fcf8f; }
+.pve-fg-warn { color: #f0b85a; }
+.pve-fg-crit { color: #ff6b63; }
+.pve-fg-off  { color: #7d838d; }
+
+/* Severity colours: bars and badges */
+.pve-bg-ok   { background-color: #4fb477; }
+.pve-bg-warn { background-color: #e3a33b; }
+.pve-bg-crit { background-color: #e5534b; }
+.pve-bg-off  { background-color: #5c6370; }
+
+/* Footer */
+.pve-footer {
+    color: #7d838d;
+    font-size: 7.5pt;
+    padding-top: 3px;
+}
+.pve-footer-error {
+    color: #ff8a80;
+}
