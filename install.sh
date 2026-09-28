@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install the desklet for the current user on Linux Mint (Cinnamon edition).
+# Install the desklet for the current user on any Linux distribution running
+# the Cinnamon desktop (Linux Mint, Fedora Cinnamon, Debian, Arch, openSUSE, ...).
 #
 #   ./install.sh          copy the desklet into ~/.local/share/cinnamon/desklets
 #   ./install.sh --link   symlink instead (edit in the repo, then reload the desklet)
@@ -16,6 +17,17 @@ TOKEN_FILE="$HOME/.config/pve-desklet/token"
 if [[ ! -f "$SRC/metadata.json" ]]; then
     echo "error: $SRC not found — run this from the project checkout" >&2
     exit 1
+fi
+
+# The desklet only runs inside Cinnamon. Installing anyway is harmless (e.g. before
+# switching session), but say so instead of leaving it silently invisible.
+if ! command -v cinnamon >/dev/null 2>&1; then
+    echo "warning: Cinnamon is not installed, so the desklet will not be shown." >&2
+    echo "         Install your distribution's Cinnamon desktop package, or use" >&2
+    echo "         tools/pve-probe.py, which works on any system with Python 3.9+." >&2
+elif [[ "${XDG_CURRENT_DESKTOP:-}" != *Cinnamon* ]]; then
+    echo "note: the current session is '${XDG_CURRENT_DESKTOP:-unknown}', not Cinnamon;" >&2
+    echo "      the desklet will appear after you log in to a Cinnamon session." >&2
 fi
 
 mkdir -p "$DEST_DIR"
