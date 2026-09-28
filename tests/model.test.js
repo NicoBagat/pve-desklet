@@ -143,6 +143,27 @@ test('sortGuests: running first, then key, VMID as tie-break', () => {
     assert.notEqual(D.sortGuests(guests, 'cpu'), guests, 'returns a copy');
 });
 
+test('groupGuests: LXC before VM, each sorted, max caps the page', () => {
+    const guests = modelWith().guests;
+    const ids = r => r.groups.map(g => [g.kind, g.items.map(x => x.vmid)]);
+
+    const all = D.groupGuests(guests, { sort: 'cpu', showStopped: true, max: 20 });
+    assert.deepEqual(ids(all), [['CT', [102, 100, 101]], ['VM', [110, 120]]]);
+    assert.equal(all.hidden, 0);
+
+    const capped = D.groupGuests(guests, { sort: 'cpu', showStopped: true, max: 4 });
+    assert.deepEqual(ids(capped), [['CT', [102, 100, 101]], ['VM', [110]]]);
+    assert.equal(capped.hidden, 1);
+
+    const ctOnly = D.groupGuests(guests, { sort: 'cpu', showStopped: true, max: 2 });
+    assert.deepEqual(ids(ctOnly), [['CT', [102, 100]]], 'an empty group is dropped');
+    assert.equal(ctOnly.hidden, 3);
+
+    const running = D.groupGuests(guests, { sort: 'cpu', showStopped: false, max: 20 });
+    assert.deepEqual(ids(running), [['CT', [102, 100, 101]], ['VM', [110]]]);
+    assert.equal(running.hidden, 0, 'filtered-out stopped guests are not counted as hidden');
+});
+
 test('parseToken', () => {
     const t = 'monitor@pve!desklet=0b8f7c8e-1d2a-4c55-9a1e-3f6b2d8e9c10';
     assert.equal(D.parseToken(`${t}\n`), t);

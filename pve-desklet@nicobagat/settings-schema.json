@@ -38,11 +38,22 @@
     "width": {
         "type": "spinbutton",
         "default": 380,
-        "min": 320,
-        "max": 800,
+        "min": 280,
+        "max": 1600,
         "step": 10,
         "units": "px",
-        "description": "Width"
+        "description": "Width",
+        "tooltip": "You can also drag the ◢ grip in the bottom-right corner."
+    },
+    "height": {
+        "type": "spinbutton",
+        "default": 0,
+        "min": 0,
+        "max": 1600,
+        "step": 10,
+        "units": "px",
+        "description": "Height (0 = fit content)",
+        "tooltip": "With a fixed height, longer pages scroll. Drag the ◢ grip to resize, or right-click → Fit height to content."
     },
     "start-page": {
         "type": "combobox",
@@ -50,7 +61,7 @@
         "options": {
             "Overview": "overview",
             "Nodes": "nodes",
-            "Guests": "guests",
+            "LXC/VM": "services",
             "Storage": "storage",
             "Alerts": "alerts"
         },

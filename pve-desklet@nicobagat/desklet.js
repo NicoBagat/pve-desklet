@@ -22,12 +22,19 @@ const RESOURCES_PATH = '/api2/json/cluster/resources';
 const DEFAULT_TOKEN_FILE = '~/.config/pve-desklet/token';
 const HTTP_TIMEOUT_S = 10;
 const SCROLL_DEBOUNCE_MS = 300;
+const SCROLL_STEP_PX = 40;
 
-const PAGES = ['overview', 'nodes', 'guests', 'storage', 'alerts'];
+// Limits for the resize grip; the settings dialog enforces the same ranges.
+const MIN_WIDTH = 280;
+const MAX_WIDTH = 1600;
+const MIN_HEIGHT = 120;
+const MAX_HEIGHT = 1600;
+
+const PAGES = ['overview', 'nodes', 'services', 'storage', 'alerts'];
 const PAGE_TITLES = {
     overview: 'Overview',
     nodes: 'Nodes',
-    guests: 'Guests',
+    services: 'LXC/VM',
     storage: 'Storage',
     alerts: 'Alerts',
 };
@@ -152,6 +159,25 @@ function sortGuests(guests, key) {
     }[key] || (() => 0);
     return guests.slice().sort((a, b) =>
         (b.running - a.running) || cmp(a, b) || (a.vmid - b.vmid));
+}
+
+// Containers first, then VMs (the page is titled "LXC/VM"); each group is sorted
+// on its own. `max` caps the page as a whole and `hidden` counts what didn't fit.
+// opts: { sort, showStopped, max }
+function groupGuests(guests, opts) {
+    let room = Math.max(1, Number(opts.max) || 20);
+    let total = 0;
+    const groups = [];
+    for (const kind of ['CT', 'VM']) {
+        let list = sortGuests(guests.filter(g => g.kind === kind), opts.sort);
+        if (!opts.showStopped) list = list.filter(g => g.running);
+        total += list.length;
+        const items = list.slice(0, room);
+        room -= items.length;
+        if (items.length > 0) groups.push({ kind, items });
+    }
+    const shown = groups.reduce((acc, g) => acc + g.items.length, 0);
+    return { groups, hidden: total - shown };
 }
 
 // Turns the raw cluster/resources array into everything the pages render.
@@ -349,6 +375,7 @@ PveDesklet.prototype = {
         this._refreshTimer = 0;
         this._rotateTimer = 0;
         this._lastScroll = 0;
+        this._resize = null;
         this._session = null;
         this._cancellable = new Gio.Cancellable();
 
@@ -369,6 +396,7 @@ PveDesklet.prototype = {
             ['tls-fingerprint', 'tlsFingerprint', reconnect],
             ['refresh-interval', 'refreshInterval', () => this._restartRefreshTimer()],
             ['width', 'widthPx', render],
+            ['height', 'heightPx', render],
             ['start-page', 'startPage', null],
             ['auto-rotate', 'autoRotate', () => this._restartRotateTimer()],
             ['guest-sort', 'guestSort', render],
@@ -384,6 +412,10 @@ PveDesklet.prototype = {
         this._pageIndex = Math.max(0, PAGES.indexOf(this.startPage));
         this._buildUi();
         this._menu.addAction('Refresh now', () => this._refresh());
+        this._menu.addAction('Fit height to content', () => {
+            this.heightPx = 0;
+            this._render();
+        });
 
         this._render();
         this._refresh();
@@ -393,6 +425,7 @@ PveDesklet.prototype = {
 
     on_desklet_removed: function () {
         this._removed = true;
+        this._endResize();
         if (this._refreshTimer) GLib.source_remove(this._refreshTimer);
         if (this._rotateTimer) GLib.source_remove(this._rotateTimer);
         this._refreshTimer = this._rotateTimer = 0;
@@ -594,13 +627,81 @@ PveDesklet.prototype = {
         header.add_child(this._dots);
         header.add_child(this._navButton('›', 1));
 
+        // The body scrolls when a fixed height is set; wheel events are routed by _onScroll.
         this._body = new St.BoxLayout({ vertical: true, style_class: 'pve-body' });
-        this._footer = new St.Label({ style_class: 'pve-footer' });
+        this._scroll = new St.ScrollView({
+            style_class: 'pve-scroll',
+            hscrollbar_policy: St.PolicyType.NEVER,
+            vscrollbar_policy: St.PolicyType.NEVER,
+            enable_mouse_scrolling: false,
+            overlay_scrollbars: true,
+        });
+        this._scroll.add_actor(this._body);
+
+        const footer = new St.BoxLayout({ style_class: 'pve-footer-row' });
+        this._footer = new St.Label({ style_class: 'pve-footer', x_expand: true, y_align: Clutter.ActorAlign.END });
+        this._grip = new St.Label({ text: '◢', style_class: 'pve-grip', reactive: true, track_hover: true, y_align: Clutter.ActorAlign.END });
+        this._grip.connect('button-press-event', (_actor, event) => this._beginResize(event));
+        this._grip.connect('motion-event', (_actor, event) => this._updateResize(event));
+        this._grip.connect('button-release-event', () => this._endResize(true));
+        footer.add_child(this._footer);
+        footer.add_child(this._grip);
 
         this._root.add_child(header);
-        this._root.add_child(this._body);
-        this._root.add_child(this._footer);
+        this._root.add_child(this._scroll);
+        this._root.add_child(footer);
         this.setContent(this._root);
+    },
+
+    // --- resizing ----------------------------------------------------------
+
+    _currentSize: function () {
+        const w = Number(this.widthPx) || 380;
+        const h = Number(this.heightPx) || 0;
+        return { w, h };
+    },
+
+    _applySize: function (w, h) {
+        this._root.set_style(`width: ${w}px;` + (h > 0 ? ` height: ${h}px;` : ''));
+        this._scroll.y_expand = h > 0;
+        this._scroll.vscrollbar_policy = h > 0 ? St.PolicyType.AUTOMATIC : St.PolicyType.NEVER;
+    },
+
+    _beginResize: function (event) {
+        if (event.get_button() !== 1) return Clutter.EVENT_PROPAGATE;
+        const [x, y] = event.get_coords();
+        const size = this._currentSize();
+        // Auto height: start from what is on screen.
+        if (size.h <= 0) size.h = Math.round(this._root.height);
+        this._resize = { x, y, w: size.w, h: size.h, device: event.get_device() };
+        this._resize.device.grab(this._grip);
+        // Stop here, or the desklet's own drag-to-move would start.
+        return Clutter.EVENT_STOP;
+    },
+
+    _updateResize: function (event) {
+        if (!this._resize) return Clutter.EVENT_PROPAGATE;
+        const [x, y] = event.get_coords();
+        const r = this._resize;
+        r.newW = Math.round(Math.min(Math.max(r.w + x - r.x, MIN_WIDTH), MAX_WIDTH));
+        r.newH = Math.round(Math.min(Math.max(r.h + y - r.y, MIN_HEIGHT), MAX_HEIGHT));
+        // Only the frame follows the pointer; rows are re-rendered once on release.
+        this._applySize(r.newW, r.newH);
+        return Clutter.EVENT_STOP;
+    },
+
+    _endResize: function (commit) {
+        const r = this._resize;
+        if (!r) return Clutter.EVENT_PROPAGATE;
+        this._resize = null;
+        r.device.ungrab();
+        // Writing the bound properties saves them to the settings file.
+        if (commit && r.newW !== undefined) {
+            this.widthPx = r.newW;
+            this.heightPx = r.newH;
+        }
+        if (!this._removed) this._render();
+        return Clutter.EVENT_STOP;
     },
 
     _navButton: function (text, step) {
@@ -611,12 +712,20 @@ PveDesklet.prototype = {
 
     _onScroll: function (event) {
         let step = 0;
+        let dy = 0;
         const dir = event.get_scroll_direction();
-        if (dir === Clutter.ScrollDirection.UP) step = -1;
-        else if (dir === Clutter.ScrollDirection.DOWN) step = 1;
+        if (dir === Clutter.ScrollDirection.UP) step = dy = -1;
+        else if (dir === Clutter.ScrollDirection.DOWN) step = dy = 1;
         else if (dir === Clutter.ScrollDirection.SMOOTH) {
-            const dy = event.get_scroll_delta()[1];
+            dy = event.get_scroll_delta()[1];
             if (Math.abs(dy) >= 0.5) step = dy > 0 ? 1 : -1;
+        }
+        // Over an overflowing body the wheel scrolls the content; pages then turn
+        // from the header, the footer or the ‹ › buttons.
+        const adj = this._scroll.vscroll.adjustment;
+        if (adj.upper - adj.page_size > 1 && this._scroll.contains(event.get_source())) {
+            adj.set_value(adj.value + dy * SCROLL_STEP_PX);
+            return Clutter.EVENT_STOP;
         }
         // Touchpads emit bursts of smooth-scroll events; one page per gesture.
         const now = GLib.get_monotonic_time() / 1000;
@@ -629,6 +738,7 @@ PveDesklet.prototype = {
 
     _turnPage: function (step) {
         this._pageIndex = (this._pageIndex + step + PAGES.length) % PAGES.length;
+        this._scroll.vscroll.adjustment.set_value(0);
         this._render();
         this._restartRotateTimer(); // manual navigation restarts the rotation countdown
     },
@@ -701,7 +811,10 @@ PveDesklet.prototype = {
         const page = PAGES[this._pageIndex];
         const model = this._model;
 
-        this._root.set_style(`width: ${Number(this.widthPx) || 380}px;`);
+        if (!this._resize) {
+            const size = this._currentSize();
+            this._applySize(size.w, size.h);
+        }
         this._title.text = `Proxmox · ${PAGE_TITLES[page]}`;
         this._dots.text = PAGES.map((_, i) => (i === this._pageIndex ? '●' : '○')).join(' ');
 
@@ -724,7 +837,7 @@ PveDesklet.prototype = {
             const renderers = {
                 overview: this._renderOverview,
                 nodes: this._renderNodes,
-                guests: this._renderGuests,
+                services: this._renderServices,
                 storage: this._renderStorage,
                 alerts: this._renderAlerts,
             };
@@ -772,31 +885,39 @@ PveDesklet.prototype = {
         }
     },
 
-    _renderGuests: function (m) {
-        let list = sortGuests(m.guests, this.guestSort);
-        if (!this.showStopped) list = list.filter(g => g.running);
-        const shown = list.slice(0, Math.max(1, Number(this.maxGuests) || 20));
+    _renderServices: function (m) {
+        const { groups, hidden } = groupGuests(m.guests, {
+            sort: this.guestSort,
+            showStopped: this.showStopped,
+            max: this.maxGuests,
+        });
         const multiNode = m.nodes.length > 1;
 
-        if (list.length === 0) this._message(this.showStopped ? 'No guests.' : 'No running guests.');
-        for (const g of shown) {
-            const cells = [
-                this._dot(g.level),
-                this._label(g.vmid, 'pve-vmid'),
-                this._label(g.name, '', true),
-                this._label(g.kind, 'pve-kind'),
-            ];
-            if (multiNode) cells.push(this._label(g.node, 'pve-node'));
-            if (g.running) {
-                cells.push(this._label(formatPercent(g.cpu), `pve-num pve-fg-${g.cpuLevel}`));
-                cells.push(this._label(formatUsage(g.mem, g.maxmem), `pve-mem pve-fg-${g.memLevel}`));
-            } else {
-                cells.push(this._label('—', 'pve-num pve-fg-off'));
-                cells.push(this._label(g.status, `pve-mem pve-fg-${g.level}`));
-            }
-            this._row(cells);
+        if (groups.length === 0 && hidden === 0)
+            this._message(this.showStopped ? 'No guests.' : 'No running guests.');
+        groups.forEach((group, i) => {
+            if (i > 0) this._body.add_child(new St.Widget({ style_class: 'pve-separator' }));
+            for (const g of group.items) this._guestRow(g, multiNode);
+        });
+        if (hidden > 0) this._message(`+${hidden} more`, 'pve-muted');
+    },
+
+    _guestRow: function (g, multiNode) {
+        const cells = [
+            this._dot(g.level),
+            this._label(g.vmid, 'pve-vmid'),
+            this._label(g.name, '', true),
+            this._label(g.kind, 'pve-kind'),
+        ];
+        if (multiNode) cells.push(this._label(g.node, 'pve-node'));
+        if (g.running) {
+            cells.push(this._label(formatPercent(g.cpu), `pve-num pve-fg-${g.cpuLevel}`));
+            cells.push(this._label(formatUsage(g.mem, g.maxmem), `pve-mem pve-fg-${g.memLevel}`));
+        } else {
+            cells.push(this._label('—', 'pve-num pve-fg-off'));
+            cells.push(this._label(g.status, `pve-mem pve-fg-${g.level}`));
         }
-        if (list.length > shown.length) this._message(`+${list.length - shown.length} more`, 'pve-muted');
+        this._row(cells);
     },
 
     _renderStorage: function (m) {
@@ -836,6 +957,7 @@ if (typeof module !== 'undefined' && module.exports) {
     Object.assign(module.exports, {
         buildModel,
         sortGuests,
+        groupGuests,
         parseToken,
         parseUrls,
         normalizeFingerprint,

@@ -139,3 +139,20 @@
 .pve-footer-error {
     color: #ff8a80;
 }
+
+/* Line between the LXC and VM groups on the LXC/VM page */
+.pve-separator {
+    height: 1px;
+    margin: 4px 0;
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+/* Resize grip, bottom-right corner */
+.pve-grip {
+    color: #5c6370;
+    font-size: 8pt;
+    padding-left: 6px;
+}
+.pve-grip:hover {
+    color: #aab0ba;
+}
