@@ -4,13 +4,13 @@
 
 ## Overview
 
-`pve-desklet` sits on the Linux Mint desktop and polls the Proxmox VE API every 15 s by default. It has five pages. Click `‹ ›` or scroll over the widget to switch pages; auto-rotation is optional.
+`pve-desklet` sits on the Linux Mint desktop and polls the Proxmox VE API every 15 s by default. It has five pages. Click `‹ ›` or scroll over the widget to switch pages; auto-rotation is optional. Drag the `◢` grip in the bottom-right corner to resize it.
 
 | Page | Shows |
 |------|-------|
 | **Overview** | Nodes online, guests running, cluster CPU (core-weighted), total RAM, fullest storage pool, alert count |
 | **Nodes** | Per node: status, uptime, CPU / RAM / root-disk bars |
-| **Guests** | Every VM and LXC: status, VMID, name, type, node, CPU %, RAM used/max (sortable, templates hidden) |
+| **LXC/VM** | Every container, then a separator, then every VM: status, VMID, name, type, node, CPU %, RAM used/max (sortable, templates hidden) |
 | **Storage** | Every pool: type, node or "shared", usage bar. Shared storage is listed once, not once per node |
 | **Alerts** | Everything that needs attention, critical first |
 
@@ -90,14 +90,16 @@ For clusters, list every node, separated by commas. They are tried in order, and
 | API token file | `~/.config/pve-desklet/token` | one line `user@realm!tokenid=secret`; the secret is never stored in Cinnamon's settings |
 | Pinned certificate SHA-256 | — | self-signed setups only |
 | Refresh every | 15 s | |
-| Width | 380 px | |
+| Width / Height | 380 px / 0 (fit content) | or drag the ◢ grip in the bottom-right corner; with a fixed height, long pages scroll |
 | Start page / Rotate pages every | Overview / off | |
 | Sort guests by | CPU | CPU, memory, name, VMID; running guests always first |
 | Show stopped guests / Max guests listed | on / 20 | |
 | Warning / Critical above | 80 % / 90 % | |
 | Watched guest tag | `watch` | tag guests in Proxmox to get "stopped" alerts for them |
 
-Right-click → **Refresh now** forces an immediate poll.
+Right-click → **Refresh now** forces an immediate poll; **Fit height to content** clears a fixed height.
+
+When a fixed height makes a page scroll, the mouse wheel over the rows scrolls the page. Use `‹ ›` or scroll over the header to switch pages.
 
 ## Project Structure
 
