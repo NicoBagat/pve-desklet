@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const D = require('../pve-desklet@nicobagat/core.js');
+const D = require('../src/core.js');
 
 const FIXTURE = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'cluster-resources.json'), 'utf8')).data;
 const DEFAULTS = { warn: 80, crit: 90, watchTag: 'watch' };
