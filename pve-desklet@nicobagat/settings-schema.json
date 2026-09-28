@@ -19,7 +19,7 @@
         "type": "entry",
         "default": "",
         "description": "Pinned certificate SHA-256 (optional)",
-        "tooltip": "Only for a self-signed certificate, e.g. connecting to a node by IP. Leave empty when the URL has a trusted certificate. Requires libsoup 3 (Linux Mint 22+)."
+        "tooltip": "Only for a self-signed certificate, e.g. connecting to a node by IP. Leave empty when the URL has a trusted certificate. Requires a Cinnamon that uses libsoup 3 (e.g. Linux Mint 22)."
     },
     "refresh-interval": {
         "type": "spinbutton",

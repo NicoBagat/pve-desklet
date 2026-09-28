@@ -7,6 +7,8 @@ authenticates, and that the token can actually see nodes, guests and storage.
 
 Exit codes: 0 ok, 1 local config problem, 2 auth/ACL problem, 3 network/TLS problem.
 """
+from __future__ import annotations  # `str | None` hints on Python 3.9 (RHEL 9, Debian 11)
+
 import argparse
 import json
 import re
