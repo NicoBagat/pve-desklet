@@ -1,10 +1,8 @@
-// Proxmox VE utilization desklet for Cinnamon.
+// Proxmox VE utilization desklet for Cinnamon: the St user interface.
 //
 // Polls GET /api2/json/cluster/resources with a read-only API token and renders
-// a paged view: overview, nodes, guests, storage, alerts.
-//
-// The pure helpers in the first half of this file make no GI calls at load time,
-// so tests/model.test.js can load it under Node with a stub `imports` global.
+// a paged view: overview, nodes, LXC/VM, storage, alerts. The model and alert
+// rules live in core.js, libsoup and the token file in io.js.
 
 const Desklet = imports.ui.desklet;
 const Settings = imports.ui.settings;
@@ -12,15 +10,15 @@ const St = imports.gi.St;
 const Clutter = imports.gi.Clutter;
 const Pango = imports.gi.Pango;
 const GLib = imports.gi.GLib;
-const Gio = imports.gi.Gio;
-const Soup = imports.gi.Soup;
 
-// Cinnamon picks the libsoup major version; Mint 22+ ships 3, older releases 2.4.
-const SOUP3 = typeof Soup.get_major_version === 'function' && Soup.get_major_version() >= 3;
+const {
+    DEFAULT_TOKEN_FILE, PAGES, PAGE_TITLES,
+    parseUrls, hostOf, normalizeFingerprint, clamp01,
+    formatUsage, formatPercent, formatUptime,
+    groupGuests, buildModel, fetchResources,
+} = require('./core');
+const { readTokenFile, SoupTransport } = require('./io');
 
-const RESOURCES_PATH = '/api2/json/cluster/resources';
-const DEFAULT_TOKEN_FILE = '~/.config/pve-desklet/token';
-const HTTP_TIMEOUT_S = 10;
 const SCROLL_DEBOUNCE_MS = 300;
 const SCROLL_STEP_PX = 40;
 
@@ -29,320 +27,6 @@ const MIN_WIDTH = 280;
 const MAX_WIDTH = 1600;
 const MIN_HEIGHT = 120;
 const MAX_HEIGHT = 1600;
-
-const PAGES = ['overview', 'nodes', 'services', 'storage', 'alerts'];
-const PAGE_TITLES = {
-    overview: 'Overview',
-    nodes: 'Nodes',
-    services: 'LXC/VM',
-    storage: 'Storage',
-    alerts: 'Alerts',
-};
-
-const LEVEL_RANK = { off: 0, ok: 0, warn: 1, crit: 2 };
-const TOKEN_RE = /^[^\s@!=]+@[^\s@!=]+![^\s@!=]+=\S+$/;
-
-// ---------------------------------------------------------------------------
-// Pure helpers
-// ---------------------------------------------------------------------------
-
-function clamp01(x) {
-    const v = Number(x) || 0;
-    return Math.min(Math.max(v, 0), 1);
-}
-
-function fraction(used, total) {
-    return total > 0 ? clamp01(used / total) : 0;
-}
-
-function normalizeThresholds(warn, crit) {
-    const c = Math.min(Math.max(Number(crit) || 90, 1), 100);
-    const w = Math.min(Math.max(Number(warn) || 80, 1), c);
-    return { warn: w, crit: c };
-}
-
-function levelFor(frac, th) {
-    const pct = frac * 100;
-    if (pct >= th.crit) return 'crit';
-    if (pct >= th.warn) return 'warn';
-    return 'ok';
-}
-
-function worst(...levels) {
-    return levels.reduce((a, b) => (LEVEL_RANK[b] > LEVEL_RANK[a] ? b : a), 'ok');
-}
-
-function splitTags(tags) {
-    return String(tags || '')
-        .split(/[;,\s]+/)
-        .filter(Boolean)
-        .map(t => t.toLowerCase());
-}
-
-function byName(a, b) {
-    return String(a.name).localeCompare(String(b.name));
-}
-
-// Accepts the file contents of the token file: first non-comment line,
-// `user@realm!tokenid=secret`, optionally prefixed with `PVEAPIToken=`.
-function parseToken(text) {
-    const line = String(text)
-        .split(/\r?\n/)
-        .map(l => l.trim())
-        .find(l => l && !l.startsWith('#'));
-    if (!line) throw new Error('token file is empty');
-    const token = line.replace(/^PVEAPIToken=/, '');
-    if (!TOKEN_RE.test(token)) throw new Error('token must look like user@realm!tokenid=secret');
-    return token;
-}
-
-// Comma/whitespace separated base URLs. HTTPS only: the token is a bearer secret.
-function parseUrls(text) {
-    return String(text || '')
-        .split(/[\s,]+/)
-        .filter(Boolean)
-        .map(u => {
-            if (!/^https:\/\//i.test(u)) throw new Error(`API URL must use https:// (${u})`);
-            return u.replace(/\/+$/, '').replace(/\/api2\/json$/, '');
-        });
-}
-
-function hostOf(url) {
-    return url.replace(/^https:\/\//i, '').replace(/\/.*$/, '');
-}
-
-// "AB:CD:…" or "abcd…" -> 64 lowercase hex chars, or null when unset.
-function normalizeFingerprint(text) {
-    const fp = String(text || '').replace(/[:\s]/g, '').toLowerCase();
-    if (!fp) return null;
-    if (!/^[0-9a-f]{64}$/.test(fp)) throw new Error('TLS fingerprint must be a SHA-256 hash (64 hex digits)');
-    return fp;
-}
-
-function formatBytes(n) {
-    const units = ['B', 'K', 'M', 'G', 'T', 'P'];
-    let v = Number(n) || 0;
-    let i = 0;
-    while (v >= 1024 && i < units.length - 1) {
-        v /= 1024;
-        i++;
-    }
-    return (i === 0 || v >= 100 ? v.toFixed(0) : v.toFixed(1)) + units[i];
-}
-
-function formatUsage(used, total) {
-    return `${formatBytes(used)}/${formatBytes(total)}`;
-}
-
-function formatPercent(frac) {
-    return `${Math.round(frac * 100)}%`;
-}
-
-function formatUptime(seconds) {
-    const s = Math.floor(Number(seconds) || 0);
-    if (s <= 0) return '—';
-    const d = Math.floor(s / 86400);
-    const h = Math.floor((s % 86400) / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    if (d > 0) return `${d}d ${h}h`;
-    if (h > 0) return `${h}h ${m}m`;
-    return `${m}m`;
-}
-
-// Running guests first, then by the chosen key; VMID breaks ties.
-function sortGuests(guests, key) {
-    const cmp = {
-        cpu: (a, b) => b.cpu - a.cpu,
-        mem: (a, b) => b.mem - a.mem,
-        name: (a, b) => String(a.name).localeCompare(String(b.name)),
-        vmid: () => 0,
-    }[key] || (() => 0);
-    return guests.slice().sort((a, b) =>
-        (b.running - a.running) || cmp(a, b) || (a.vmid - b.vmid));
-}
-
-// Containers first, then VMs (the page is titled "LXC/VM"); each group is sorted
-// on its own. `max` caps the page as a whole and `hidden` counts what didn't fit.
-// opts: { sort, showStopped, max }
-function groupGuests(guests, opts) {
-    let room = Math.max(1, Number(opts.max) || 20);
-    let total = 0;
-    const groups = [];
-    for (const kind of ['CT', 'VM']) {
-        let list = sortGuests(guests.filter(g => g.kind === kind), opts.sort);
-        if (!opts.showStopped) list = list.filter(g => g.running);
-        total += list.length;
-        const items = list.slice(0, room);
-        room -= items.length;
-        if (items.length > 0) groups.push({ kind, items });
-    }
-    const shown = groups.reduce((acc, g) => acc + g.items.length, 0);
-    return { groups, hidden: total - shown };
-}
-
-// Turns the raw cluster/resources array into everything the pages render.
-// opts: { warn, crit, watchTag }
-function buildModel(resources, opts) {
-    const th = normalizeThresholds(opts.warn, opts.crit);
-    const watchTag = String(opts.watchTag || '').trim().toLowerCase();
-    const alerts = [];
-    const alert = (severity, text) => alerts.push({ severity, text });
-
-    const nodes = resources
-        .filter(r => r.type === 'node')
-        .map(r => {
-            const n = {
-                name: r.node,
-                status: r.status || 'unknown',
-                online: r.status === 'online',
-                cpu: clamp01(r.cpu),
-                maxcpu: r.maxcpu || 0,
-                mem: r.mem || 0,
-                maxmem: r.maxmem || 0,
-                disk: r.disk || 0,
-                maxdisk: r.maxdisk || 0,
-                uptime: r.uptime || 0,
-            };
-            n.memFrac = fraction(n.mem, n.maxmem);
-            n.diskFrac = fraction(n.disk, n.maxdisk);
-            n.cpuLevel = levelFor(n.cpu, th);
-            n.memLevel = levelFor(n.memFrac, th);
-            n.diskLevel = levelFor(n.diskFrac, th);
-            n.level = n.online ? worst(n.cpuLevel, n.memLevel, n.diskLevel) : 'crit';
-            return n;
-        })
-        .sort(byName);
-    const onlineNodes = new Set(nodes.filter(n => n.online).map(n => n.name));
-
-    if (nodes.length === 0)
-        alert('crit', 'No nodes visible — does the token have the PVEAuditor role on "/"?');
-    for (const n of nodes) {
-        if (!n.online) {
-            alert('crit', `Node ${n.name} is ${n.status}`);
-            continue;
-        }
-        for (const [label, frac, level] of [
-            ['CPU', n.cpu, n.cpuLevel],
-            ['RAM', n.memFrac, n.memLevel],
-            ['root disk', n.diskFrac, n.diskLevel],
-        ]) {
-            if (level !== 'ok') alert(level, `Node ${n.name} ${label} at ${formatPercent(frac)}`);
-        }
-    }
-
-    const guests = resources
-        .filter(r => (r.type === 'qemu' || r.type === 'lxc') && !r.template)
-        .map(r => {
-            const g = {
-                vmid: r.vmid,
-                name: r.name || String(r.vmid),
-                kind: r.type === 'qemu' ? 'VM' : 'CT',
-                node: r.node,
-                status: r.status || 'unknown',
-                running: r.status === 'running',
-                cpu: clamp01(r.cpu),
-                maxcpu: r.maxcpu || 0,
-                mem: r.mem || 0,
-                maxmem: r.maxmem || 0,
-                uptime: r.uptime || 0,
-                tags: splitTags(r.tags),
-                hastate: r.hastate || '',
-            };
-            g.memFrac = fraction(g.mem, g.maxmem);
-            g.watched = watchTag !== '' && g.tags.indexOf(watchTag) !== -1;
-            g.cpuLevel = g.running ? levelFor(g.cpu, th) : 'off';
-            g.memLevel = g.running ? levelFor(g.memFrac, th) : 'off';
-            if (g.running) g.level = worst(g.cpuLevel, g.memLevel);
-            else g.level = g.watched ? 'crit' : 'off';
-            return g;
-        });
-
-    for (const g of guests) {
-        const id = `${g.kind} ${g.vmid} (${g.name})`;
-        if (g.watched && !g.running) {
-            const where = onlineNodes.has(g.node) ? '' : ` — node ${g.node} offline`;
-            alert('crit', `${id} is ${g.status}${where}`);
-        }
-        if (g.hastate === 'error' || g.hastate === 'fence') alert('crit', `${id} HA state: ${g.hastate}`);
-        else if (g.hastate === 'recovery') alert('warn', `${id} HA state: recovery`);
-    }
-
-    // Shared storage is listed once per node; keep one entry, preferring an available copy.
-    const storageByKey = new Map();
-    for (const r of resources) {
-        if (r.type !== 'storage') continue;
-        const shared = !!r.shared;
-        const key = shared ? `shared/${r.storage}` : `${r.node}/${r.storage}`;
-        const s = {
-            name: r.storage,
-            node: shared ? null : r.node,
-            shared,
-            type: r.plugintype || '',
-            available: r.status === 'available',
-            disk: r.disk || 0,
-            maxdisk: r.maxdisk || 0,
-        };
-        s.frac = fraction(s.disk, s.maxdisk);
-        s.level = s.available ? levelFor(s.frac, th) : 'crit';
-        const prev = storageByKey.get(key);
-        if (!prev || (!prev.available && s.available)) storageByKey.set(key, s);
-    }
-    const storage = Array.from(storageByKey.values()).sort((a, b) =>
-        (a.shared - b.shared) ||
-        String(a.node || '').localeCompare(String(b.node || '')) ||
-        byName(a, b));
-
-    for (const s of storage) {
-        const label = s.shared ? s.name : `${s.name} on ${s.node}`;
-        if (!s.shared && !onlineNodes.has(s.node)) {
-            s.level = 'off'; // the node-offline alert already covers it
-            continue;
-        }
-        if (!s.available) alert('crit', `Storage ${label} unavailable`);
-        else if (s.level !== 'ok') alert(s.level, `Storage ${label} at ${formatPercent(s.frac)}`);
-    }
-
-    const online = nodes.filter(n => n.online);
-    const cores = online.reduce((acc, n) => acc + n.maxcpu, 0);
-    const cpu = cores > 0 ? online.reduce((acc, n) => acc + n.cpu * n.maxcpu, 0) / cores : 0;
-    const mem = online.reduce((acc, n) => acc + n.mem, 0);
-    const maxmem = online.reduce((acc, n) => acc + n.maxmem, 0);
-    const fullestStorage = storage
-        .filter(s => s.available)
-        .reduce((best, s) => (!best || s.frac > best.frac ? s : best), null);
-
-    const summary = {
-        nodesOnline: online.length,
-        nodesTotal: nodes.length,
-        guestsRunning: guests.filter(g => g.running).length,
-        guestsTotal: guests.length,
-        vms: guests.filter(g => g.kind === 'VM').length,
-        cts: guests.filter(g => g.kind === 'CT').length,
-        cores,
-        cpu,
-        cpuLevel: levelFor(cpu, th),
-        mem,
-        maxmem,
-        memFrac: fraction(mem, maxmem),
-        fullestStorage,
-    };
-    summary.memLevel = levelFor(summary.memFrac, th);
-
-    // Stable sort: critical first, original order within a severity.
-    alerts.sort((a, b) => LEVEL_RANK[b.severity] - LEVEL_RANK[a.severity]);
-
-    return { nodes, guests, storage, alerts, summary };
-}
-
-function bytesToString(bytes) {
-    if (!bytes) return '';
-    if (typeof TextDecoder !== 'undefined') return new TextDecoder('utf-8').decode(bytes);
-    return imports.byteArray.toString(bytes);
-}
-
-function expandHome(path) {
-    return path.startsWith('~/') ? GLib.get_home_dir() + path.slice(1) : path;
-}
 
 // ---------------------------------------------------------------------------
 // Desklet
@@ -358,7 +42,6 @@ PveDesklet.prototype = {
     _init: function (metadata, deskletId) {
         Desklet.Desklet.prototype._init.call(this, metadata, deskletId);
 
-        this._meta = metadata;
         this._pageIndex = 0;
         this._resources = null;
         this._model = null;
@@ -376,8 +59,7 @@ PveDesklet.prototype = {
         this._rotateTimer = 0;
         this._lastScroll = 0;
         this._resize = null;
-        this._session = null;
-        this._cancellable = new Gio.Cancellable();
+        this._transport = new SoupTransport(`pve-desklet/${metadata.version || '0'}`);
 
         const reconnect = () => {
             this._resetSession();
@@ -466,10 +148,15 @@ PveDesklet.prototype = {
             const urls = parseUrls(this.apiUrls);
             this._needsConfig = urls.length === 0;
             if (this._needsConfig) return;
-            const token = this._readToken();
-            const resources = await this._fetchResources(urls, token);
+            const { token, warning } = readTokenFile(this.tokenFile || DEFAULT_TOKEN_FILE);
+            this._tokenWarning = warning;
+            this._transport.pin = normalizeFingerprint(this.tlsFingerprint);
+            const { data, index } = await fetchResources(
+                urls, token, (url, headers) => this._transport.get(url, headers), this._preferredUrl);
             if (gen !== this._generation) return;
-            this._resources = resources;
+            this._preferredUrl = index;
+            this._source = hostOf(urls[index]);
+            this._resources = data;
             this._lastOk = GLib.DateTime.new_now_local().format('%H:%M:%S');
             this._error = null;
             this._rebuild();
@@ -493,121 +180,9 @@ PveDesklet.prototype = {
         if (this._tokenWarning) this._model.alerts.push({ severity: 'warn', text: this._tokenWarning });
     },
 
-    _readToken: function () {
-        const path = expandHome(this.tokenFile || DEFAULT_TOKEN_FILE);
-        let contents;
-        try {
-            contents = GLib.file_get_contents(path)[1];
-        } catch (e) {
-            throw new Error(`cannot read token file ${path}`);
-        }
-        this._tokenWarning = null;
-        try {
-            const info = Gio.File.new_for_path(path).query_info('unix::mode', Gio.FileQueryInfoFlags.NONE, null);
-            if (info.get_attribute_uint32('unix::mode') & 0o077)
-                this._tokenWarning = `Token file is readable by other users — run chmod 600 ${path}`;
-        } catch (e) {
-            // Permission check is advisory only.
-        }
-        return parseToken(bytesToString(contents));
-    },
-
-    _fetchResources: async function (urls, token) {
-        const auth = `PVEAPIToken=${token}`;
-        const pin = normalizeFingerprint(this.tlsFingerprint);
-        if (pin && !SOUP3)
-            throw new Error('certificate pinning needs libsoup 3 (Linux Mint 22+); use a URL with a trusted certificate');
-
-        // Start with the URL that worked last time, then fall back in configured order.
-        const order = urls.map((_, i) => (i + this._preferredUrl) % urls.length);
-        let lastError = null;
-        for (const i of order) {
-            const res = await this._httpGet(urls[i] + RESOURCES_PATH, auth, pin).catch(e => {
-                lastError = e;
-                return null;
-            });
-            if (!res) continue;
-            // Same token everywhere, so an auth failure will not improve on another node.
-            if (res.status === 401) throw new Error(`authentication failed at ${hostOf(urls[i])} — check the token`);
-            if (res.status === 403) throw new Error(`permission denied at ${hostOf(urls[i])} — check the token ACL`);
-            if (res.status !== 200) {
-                lastError = new Error(`HTTP ${res.status} from ${hostOf(urls[i])}`);
-                continue;
-            }
-            let data;
-            try {
-                data = JSON.parse(res.body).data;
-            } catch (e) {
-                data = null;
-            }
-            if (!Array.isArray(data)) {
-                lastError = new Error(`unexpected response from ${hostOf(urls[i])}`);
-                continue;
-            }
-            this._preferredUrl = i;
-            this._source = hostOf(urls[i]);
-            return data;
-        }
-        throw lastError || new Error('no API URL reachable');
-    },
-
-    _ensureSession: function () {
-        if (this._session) return this._session;
-        const session = new Soup.Session();
-        session.timeout = HTTP_TIMEOUT_S;
-        session.user_agent = `pve-desklet/${this._meta.version || '0'}`;
-        if (!SOUP3) {
-            // libsoup 2 only verifies against the system CA store when told to.
-            session.ssl_use_system_ca_file = true;
-            session.ssl_strict = true;
-        }
-        this._session = session;
-        return session;
-    },
-
     _resetSession: function () {
         this._generation++;
-        this._cancellable.cancel();
-        this._cancellable = new Gio.Cancellable();
-        if (this._session) this._session.abort();
-        this._session = null;
-    },
-
-    _httpGet: function (url, auth, pin) {
-        const session = this._ensureSession();
-        return new Promise((resolve, reject) => {
-            const msg = Soup.Message.new('GET', url);
-            if (!msg) {
-                reject(new Error(`invalid URL: ${url}`));
-                return;
-            }
-            msg.request_headers.append('Authorization', auth);
-            msg.request_headers.append('Accept', 'application/json');
-
-            if (SOUP3) {
-                if (pin) {
-                    // Only consulted when normal verification fails (self-signed cert).
-                    msg.connect('accept-certificate', (_m, cert) =>
-                        GLib.compute_checksum_for_data(GLib.ChecksumType.SHA256, cert.certificate) === pin);
-                }
-                session.send_and_read_async(msg, GLib.PRIORITY_DEFAULT, this._cancellable, (s, result) => {
-                    try {
-                        const bytes = s.send_and_read_finish(result);
-                        resolve({ status: msg.get_status(), body: bytesToString(bytes.get_data()) });
-                    } catch (e) {
-                        reject(e);
-                    }
-                });
-            } else {
-                session.queue_message(msg, (_s, m) => {
-                    // libsoup 2 reports transport/TLS failures as status codes below 100.
-                    if (m.status_code < 100)
-                        reject(new Error(m.reason_phrase || `transport error ${m.status_code}`));
-                    else
-                        resolve({ status: m.status_code, body: m.response_body.data });
-                });
-            }
-        });
+        this._transport.reset();
     },
 
     // --- UI scaffolding ----------------------------------------------------
@@ -950,20 +525,4 @@ PveDesklet.prototype = {
 
 function main(metadata, deskletId) {
     return new PveDesklet(metadata, deskletId);
-}
-
-// Exposed for the Node test suite; Cinnamon's loader only looks for main().
-if (typeof module !== 'undefined' && module.exports) {
-    Object.assign(module.exports, {
-        buildModel,
-        sortGuests,
-        groupGuests,
-        parseToken,
-        parseUrls,
-        normalizeFingerprint,
-        normalizeThresholds,
-        formatBytes,
-        formatUptime,
-        formatPercent,
-    });
 }

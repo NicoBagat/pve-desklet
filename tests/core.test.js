@@ -1,14 +1,10 @@
-// Tests for the pure helpers in desklet.js. Run: node --test tests/
+// Tests for core.js, the platform-independent part. Run: node --test tests/*.test.js
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-// desklet.js reads Cinnamon's `imports` global at load time; a recursive stub is
-// enough because the pure helpers never touch GI.
-const stub = new Proxy({}, { get: (_t, key) => (key === 'prototype' ? {} : stub) });
-globalThis.imports = stub;
-const D = require('../pve-desklet@nicobagat/desklet.js');
+const D = require('../pve-desklet@nicobagat/core.js');
 
 const FIXTURE = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'cluster-resources.json'), 'utf8')).data;
 const DEFAULTS = { warn: 80, crit: 90, watchTag: 'watch' };
@@ -202,4 +198,66 @@ test('formatting helpers', () => {
     assert.equal(D.formatUptime(3 * 3600 + 25 * 60), '3h 25m');
     assert.equal(D.formatUptime(1098000), '12d 17h');
     assert.equal(D.formatPercent(0.925), '93%');
+});
+
+// --- fetchResources: URL failover with an injected transport -----------------
+
+const TOKEN = 'monitor@pve!desklet=secret';
+const OK_BODY = JSON.stringify({ data: [{ type: 'node', node: 'pve1', status: 'online' }] });
+const URLS = ['https://a:8006', 'https://b:8006', 'https://c:8006'];
+
+// answers: host -> { status, body } | Error. Records the hosts tried, in order.
+function fakeHttp(answers) {
+    const calls = [];
+    const httpGet = async (url, headers) => {
+        const host = url.replace(/^https:\/\//, '').replace(/[:/].*$/, '');
+        calls.push({ host, url, headers });
+        const a = answers[host];
+        if (a instanceof Error) throw a;
+        return a;
+    };
+    return { httpGet, calls, hosts: () => calls.map(c => c.host) };
+}
+
+test('fetchResources: first URL answers; path and headers are set', async () => {
+    const http = fakeHttp({ a: { status: 200, body: OK_BODY } });
+    const res = await D.fetchResources(URLS, TOKEN, http.httpGet, 0);
+    assert.equal(res.index, 0);
+    assert.equal(res.data[0].node, 'pve1');
+    assert.equal(http.calls[0].url, 'https://a:8006/api2/json/cluster/resources');
+    assert.equal(http.calls[0].headers.Authorization, `PVEAPIToken=${TOKEN}`);
+});
+
+test('fetchResources: starts at the preferred URL and wraps around', async () => {
+    const http = fakeHttp({ c: new Error('down'), a: { status: 200, body: OK_BODY } });
+    const res = await D.fetchResources(URLS, TOKEN, http.httpGet, 2);
+    assert.deepEqual(http.hosts(), ['c', 'a']);
+    assert.equal(res.index, 0);
+});
+
+test('fetchResources: network errors, bad status and bad JSON fall through to the next URL', async () => {
+    const http = fakeHttp({
+        a: new Error('TLS handshake failed'),
+        b: { status: 200, body: '<html>proxy error</html>' },
+        c: { status: 200, body: OK_BODY },
+    });
+    const res = await D.fetchResources(URLS, TOKEN, http.httpGet, 0);
+    assert.equal(res.index, 2);
+
+    const bad = fakeHttp({ a: { status: 502, body: '' }, b: { status: 200, body: '{"data":null}' }, c: new Error('timeout') });
+    await assert.rejects(D.fetchResources(URLS, TOKEN, bad.httpGet, 0), /timeout/, 'last failure is reported');
+    assert.deepEqual(bad.hosts(), ['a', 'b', 'c']);
+});
+
+test('fetchResources: 401/403 stop immediately, since the token is the same everywhere', async () => {
+    const auth = fakeHttp({ a: { status: 401, body: '' }, b: { status: 200, body: OK_BODY } });
+    await assert.rejects(D.fetchResources(URLS, TOKEN, auth.httpGet, 0), /authentication failed at a:8006/);
+    assert.deepEqual(auth.hosts(), ['a']);
+
+    const acl = fakeHttp({ a: { status: 403, body: '' } });
+    await assert.rejects(D.fetchResources(URLS, TOKEN, acl.httpGet, 0), /permission denied/);
+});
+
+test('fetchResources: no URLs is an error, not a silent success', async () => {
+    await assert.rejects(D.fetchResources([], TOKEN, async () => ({ status: 200, body: OK_BODY }), 0), /no API URL/);
 });
