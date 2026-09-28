@@ -8,8 +8,10 @@
 # Also offers to create the API token file (~/.config/pve-desklet/token, mode 600).
 set -euo pipefail
 
+# The source lives in src/, but Cinnamon only loads a desklet whose installed
+# directory is named after the UUID in metadata.json.
 UUID="pve-desklet@nicobagat"
-SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$UUID"
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/src"
 DEST_DIR="$HOME/.local/share/cinnamon/desklets"
 DEST="$DEST_DIR/$UUID"
 TOKEN_FILE="$HOME/.config/pve-desklet/token"

@@ -120,7 +120,8 @@ When a fixed height makes a page scroll, the mouse wheel over the rows scrolls t
 ## Project Structure
 
 ```
-pve-desklet@nicobagat/     the desklet as installed into ~/.local/share/cinnamon/desklets/
+src/                       the desklet; install.sh installs it as
+                           ~/.local/share/cinnamon/desklets/pve-desklet@nicobagat/
   core.js                  platform-independent: parsing, model, alert rules, sorting,
                            formatting, URL-failover fetch (HTTP injected); plain JS
   io.js                    GJS side effects: libsoup transport, token file
@@ -138,7 +139,7 @@ install.sh                 per-user install + token file setup
 ```bash
 node --test tests/*.test.js                   # core.js (Node 18+)
 python3 -m unittest discover -s tests         # probe against a mock HTTPS Proxmox (needs openssl)
-for f in pve-desklet@nicobagat/*.js; do node --check "$f"; done
+for f in src/*.js; do node --check "$f"; done
 ```
 
 `core.js` must stay free of runtime-specific APIs (`imports.*`, Node or GI modules, `fetch`) so that it keeps loading in both Node and Cinnamon; anything that touches the system belongs in `io.js` or `desklet.js`. Only `core.js` and `io.js` may contain a line starting with `module.exports =`: in `desklet.js` such a line would stop Cinnamon from finding `main()`.
