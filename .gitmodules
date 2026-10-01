@@ -1,0 +1,6 @@
+[submodule "ai_stack/selfhost-RAG"]
+	branch = main
+[submodule "homelab/pve-desklet"]
+	branch = main
+[submodule "robotics/ur3-6axis"]
+	branch = main
