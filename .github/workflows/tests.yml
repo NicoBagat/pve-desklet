@@ -1,0 +1,69 @@
+name: Tests
+
+# The same checks as the README's Development section, on every pull request
+# and on main after a merge.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch or PR supersedes a run still in progress.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: core.js (Node ${{ matrix.node }})
+    # Pinned rather than ubuntu-latest so a runner image change can't move the matrix.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        # The README's minimum, and the current LTS.
+        node: ['18', 'lts/*']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Syntax check
+        run: for f in src/*.js; do node --check "$f"; done
+      # The shell expands the glob, so this behaves the same on every Node version.
+      - name: Unit tests
+        run: node --test tests/*.test.js
+      - name: Module rules
+        run: |
+          # In desklet.js such a line stops Cinnamon from finding main().
+          if grep -n '^module\.exports' src/desklet.js; then
+            echo "::error file=src/desklet.js::only core.js and io.js may assign module.exports"
+            exit 1
+          fi
+          # core.js has to load unchanged in Node and in Cinnamon (comment lines are skipped).
+          if grep -nvE '^\s*//' src/core.js | grep -E '\b(imports\.|require\(|fetch\()'; then
+            echo "::error file=src/core.js::core.js must not use runtime-specific APIs (imports.*, require, fetch)"
+            exit 1
+          fi
+
+  probe:
+    name: pve-probe.py (Python ${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        # The probe's documented minimum, and the latest release.
+        python: ['3.9', '3.x']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      # Mock HTTPS Proxmox with a throwaway certificate; the runner image ships openssl.
+      - name: Probe tests
+        run: python -m unittest discover -s tests -v

@@ -144,6 +144,8 @@ for f in src/*.js; do node --check "$f"; done
 
 `core.js` must stay free of runtime-specific APIs (`imports.*`, Node or GI modules, `fetch`) so that it keeps loading in both Node and Cinnamon; anything that touches the system belongs in `io.js` or `desklet.js`. Only `core.js` and `io.js` may contain a line starting with `module.exports =`: in `desklet.js` such a line would stop Cinnamon from finding `main()`.
 
+CI (`.github/workflows/tests.yml`) runs the same three commands on every pull request and on `main`. It uses Node 18 and the current LTS for `core.js`, and Python 3.9 and the latest 3.x for the probe. It also enforces both rules above: it fails if `desklet.js` assigns `module.exports`, or if a non-comment line of `core.js` uses `imports.*`, `require()` or `fetch()`.
+
 While developing, `./install.sh --link` lets you edit the files in place. Remove and re-add the desklet to reload it. Errors appear in Looking Glass (`Alt+F2` → `lg` → *Log*) prefixed `pve-desklet:`.
 
 ## Status
